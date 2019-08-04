@@ -37,6 +37,8 @@ public:
    // server for 23 million years     :(
    typedef boost::uint64_t id_type;
    typedef boost::uint64_t size_type;
+   //可调用对象分好几种，c++11中有lamda表达式，仿函数类，普通函数，函数指针，他们类型不同，但是可能具有同样的调用形式。
+   //这时候用，funciton类的实例，对调用形式一样的，都可以赋值。
    typedef boost::function<void (const boost::system::error_code& error)> wait_callback;
 
    // open or create the queue at the path
@@ -148,7 +150,7 @@ private:
       key_type() : type(KT_QUEUE), id(0) {}
 
       key_type(char _type, id_type _id) : type(_type), id(_id) {}
-
+      //leveldb::Slice包含length以及指向外部字节数组的指针，和string可以互相转换。大部分不用string一个是只要保存指针就行，另一个是c风格的字符串不能包含\0
       key_type(const leveldb::Slice& s)
       : type(s.data()[sizeof(id_type)]), id(*reinterpret_cast<const id_type*>(s.data())) {}
 
@@ -232,6 +234,7 @@ private:
          throw boost::system::system_error(boost::system::errc::io_error, boost::asio::error::get_system_category());
    }
 
+   //scoped_ptr就相当于std::unique_ptr
    boost::scoped_ptr<comparator> cmp_;
    boost::scoped_ptr<leveldb::DB> journal_;
 

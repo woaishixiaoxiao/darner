@@ -40,13 +40,14 @@ void handler::read_request(const system::error_code& e, size_t bytes_transferred
 {
    if (e)
       return error("read_request", e);
-
+   
+   //这里注意的是shared_from_this中返回了handler的智能指针，在server中该对象的指针也被智能指针托管了，即使server中处理accept的回调函数中释放了智能指针，但是也不会使得handler堆对象被释放。，
    async_read_until(socket_, in_, '\n', bind(&handler::parse_request, shared_from_this(), _1, _2));
 }
 
 void handler::parse_request(const system::error_code& e, size_t bytes_transferred)
 {
-   if (e == error::eof && !in_.size()) // clean close by client?
+   if (e == error::eof && !in_.size()) // clean close by client?   //这里handler对象指针会自动被释放，触发了handler的析构函数，socket释放，socket是被包装后的，释放时候，析构函数中会发送close。
       return;
    else if (e)
       return error("parse_request", e);
@@ -54,7 +55,7 @@ void handler::parse_request(const system::error_code& e, size_t bytes_transferre
    // TODO: it would have been nice to pass in an buffers_iterator directly to spirit, but
    // something constness thing about the iterator_traits::value_type is borking up being able to use it
    asio::streambuf::const_buffers_type bufs = in_.data();
-   buf_.assign(buffers_begin(bufs), buffers_begin(bufs) + bytes_transferred);
+   buf_.assign(buffers_begin(bufs), buffers_begin(bufs) + bytes_transferred);  //asio::streambuf::const_buffers_type这个暂时还不清楚。
    if (!parser_.parse(req_, buf_))
       return error("");
    in_.consume(bytes_transferred);
@@ -115,10 +116,18 @@ void handler::flush_all()
 void handler::set()
 {
    // round up the number of chunks we need, and fetch \r\n if it's just one chunk
+   //算倍数要用下面的算法，否则如果比chunk_size_小，那么则分配的大小为0。
    push_stream_.open(queues_[req_.queue], (req_.num_bytes + chunk_size_ - 1) / chunk_size_, req_.set_sync);
    queue::size_type remaining = req_.num_bytes - push_stream_.tell();
+   //下面可以看出来，每次最多只会读chunk_size_大小的数据。这里可以看出来asio和reactor的一个区别，reactor一般会将数据都读取到缓冲区，
+   //然后在去该数据中进行消费，也就是保证了tcp buffer中是不会存在数据的。但是asio是从tcp buffer中根据条件读取数据到用户，tcp buffer中
+   //可能还有剩余。
+   //另外自己还能感觉到的区别就是asio一般不会用while循环，然后阻塞在epoll上面。单独开几个线程然后用asio::run就能达到这个效果。然后在每次
+   //处理函数中继续注册异步操作。起始reactor也是这样，在每次异步操作中会注册一些事件。
    queue::size_type required = remaining > chunk_size_ ? chunk_size_ : remaining + 2;
-
+   // async_read函数第三个参数是一个可调用对象，transfer_at_least返回一个函数对象，函数逻辑为直到读取指定的大小或者缓冲满了为止
+   //in.size()返回的是已经读了的数据的大小，required是还需要读多少。这里不知道为什么这么写，按理说，初始的时候，in_.size()大小应该为0
+   //这里假设的条件是in的大小肯定是大于required的。因为in的数据类型streambuf大小是自动增长的，所以这里不存在这个问题。
    async_read(
       socket_, in_, transfer_at_least(required > in_.size() ? required - in_.size() : 0),
       bind(&handler::set_on_read_chunk, shared_from_this(), _1, _2));
@@ -211,6 +220,8 @@ void handler::get()
       return error("get", ex);
    }
 
+   //memcached协议中有规定get请求的响应是什么样子的
+   //这里没有使用string，更没有使用c风格字符串，后者不具备动态增加能力，前者不清楚为什么
    header_buf_.resize(21 + req_.queue.size()); // 21 = len("VALUE  0 4294967296\r\n")
    header_buf_.resize(::sprintf(&header_buf_[0], "VALUE %s 0 %lu\r\n", req_.queue.c_str(), pop_stream_.size()));
 
@@ -228,6 +239,9 @@ void handler::get()
          }
       }
       ++stats_.items_dequeued;
+	  //这里为什么要用两个括号
+	  //boost里面有buff以及stream，前者是适配器本本身不具备数据，并且不可动态增长。后者拥有实际数据并且可以动态增长。
+	  //这里为什么有没读完的情况？？？明天重点看这个了
       array<const_buffer, 3> bufs = {{ buffer(header_buf_), buffer(buf_), buffer("\r\nEND\r\n", 7) }};
       async_write(socket_, bufs, bind(&handler::read_request, shared_from_this(), _1, _2));
    }

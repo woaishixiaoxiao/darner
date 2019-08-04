@@ -30,8 +30,12 @@ public:
       boost::filesystem::directory_iterator end_it;
       for (boost::filesystem::directory_iterator it(data_path_); it != end_it; ++it)
       {
-         std::string queue_name =
+         std::string queue_name = 
             boost::filesystem::path(it->path().filename()).string(); // useless recast for boost backwards compat
+         //函数可以使用模板编写，模板可以推断出来是传值还是传递引用。如果直接传递函数对象则为值传递了。
+         //所以这时候boost::ref(X)就能派生用场了。该封装返回一个reference_wrapper对象。里面封装了函数对象的引用。在函数中
+         //使用unwrap_ref解封装然后然后使用函数对象。这是ref的一个用处。下面的使用没有什么实际用处
+         //https://blog.csdn.net/zengraoli/article/details/9663057
          queues_[queue_name] = boost::make_shared<queue>(boost::ref(ios_), (data_path_ / queue_name).string());
       }
    }
